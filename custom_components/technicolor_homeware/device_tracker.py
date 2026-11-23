@@ -57,7 +57,7 @@ class TechnicolorTracker(CoordinatorEntity[TechnicolorCoordinator], ScannerEntit
         self._last_name = last_name
         self._attr_unique_id = mac
         self._attr_device_info = DeviceInfo(
-            connections={(CONNECTION_NETWORK_MAC, mac)}, default_name=last_name or mac
+            connections={(CONNECTION_NETWORK_MAC, mac)}, name=last_name or mac
         )
 
     @property

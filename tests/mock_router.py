@@ -51,6 +51,14 @@ class MockRouter:
         self.reboots = 0
         self.requests: list[str] = []
         self.device_page = "device-modal.lp.txt"
+        self.wifi = {"wifi_state": "1", "ssid": "Telekom-301213", "wpa_psk": "TOPSECRET123", "security": "wpa2-psk"}
+        self.saves: list[dict] = []
+        self.crash_on_save = False
+        self.sharing = {"samba": "1", "sambaFilesharing": "1", "dlnaEnabled": "0", "passWord": "SHAREPASS77"}
+        self.sharing_saves: list[dict] = []
+        # set to an asyncio.Event to hold a sharing save until the test releases it
+        self.hold_sharing_save = None
+        self.refuse_sharing = False
 
     def expire_sessions(self) -> None:
         for session in self.sessions.values():
@@ -109,6 +117,44 @@ class MockRouter:
             return self._json(request, f'{{"M":"{_sha(long_to_bytes(big_a) + expected + key).hex()}"}}')
         return self._json(request, '{"error":{"msg":"failed"}}')
 
+    def _wireless(self, session: dict) -> str:
+        html = (FIXTURES / "wireless-modal.lp").read_text(encoding="utf-8")
+        html = html.replace('name="wifi_state" value="1"', f'name="wifi_state" value="{self.wifi["wifi_state"]}"')
+        return html.replace("tok123456789", session["token"])
+
+    def _sharing(self, errors: str = "") -> str:
+        html = (FIXTURES / "contentsharing-modal.lp").read_text(encoding="utf-8")
+        values = {
+            "samba": self.sharing["samba"],
+            "share": self.sharing["sambaFilesharing"],
+            "dlna": self.sharing["dlnaEnabled"],
+        }
+        for key, value in list(values.items()):
+            values[f"{key}_class"] = " switcherOn" if value == "1" else ""
+        return html.format(errors=errors, **values)
+
+    async def _save_sharing(self, data) -> str:
+        self.sharing_saves.append(dict(data))
+        if self.hold_sharing_save is not None:
+            await self.hold_sharing_save.wait()
+        required = ("samba", "sambaFilesharing", "sambaName", "sambaWorkgroup", "dlnaEnabled", "usb3Enabled")
+        error = '<div class="alert alert-error">Some parameters failed validation</div>'
+        if (
+            self.refuse_sharing
+            or any(name not in data for name in required)
+            or data.get("passWord", "SHAREPASS77") != "SHAREPASS77"
+        ):
+            return self._sharing(error)
+        if data["usb3Enabled"] != "1":
+            raise AssertionError("the USB 3.1 switch reboots the gateway and must never change")
+        if data["sambaFilesharing"] == "1" and data["samba"] != "1":
+            return self._sharing(error)
+        for name in ("samba", "sambaFilesharing", "dlnaEnabled"):
+            self.sharing[name] = data[name]
+        if self.sharing["samba"] == "0":
+            self.sharing["sambaFilesharing"] = "0"
+        return self._sharing()
+
     def _json(self, request: web.Request, text: str) -> web.Response:
         return self._respond(request, text, content_type="application/json")
 
@@ -124,7 +170,31 @@ class MockRouter:
                 return self._respond(request, "Forbidden", status=403)
             if name == "gateway-modal" and data.get("action") == "system_reboot":
                 self.reboots += 1
+            if name == "wireless-modal" and data.get("action") == "SAVE":
+                self.saves.append(dict(data))
+                if self.crash_on_save:
+                    return self._respond(
+                        request,
+                        f"<html><body><h1>500 Internal Server Error</h1><pre>wireless-modal.lp:612: attempt to "
+                        f"concatenate nil (field psk was {data.get('wpa_psk')})</pre></body></html>",
+                        status=500,
+                    )
+                partial = set(data) - {"action", "fromModal", "CSRFtoken"} == {"wifi_state"}
+                complete = all(k in data for k in ("ssid", "security", "wpa_psk", "wifi_state"))
+                if data.get("fromModal") != "YES" or not (
+                    partial or (complete and data["wpa_psk"] == self.wifi["wpa_psk"])
+                ):
+                    error = '<div class="control-group error"><span class="help-inline">Invalid form</span></div>'
+                    return self._respond(request, error)
+                self.wifi["wifi_state"] = data["wifi_state"]
+                return self._respond(request, self._wireless(session))
+            if name == "contentsharing-modal" and data.get("action") == "SAVE":
+                return self._respond(request, await self._save_sharing(data))
             return self._respond(request, "{}", content_type="application/json")
+        if name == "wireless-modal":
+            return self._respond(request, self._wireless(session))
+        if name == "contentsharing-modal":
+            return self._respond(request, self._sharing())
         files = {
             "device-modal": self.device_page,
             "system-info-modal": "system-info-modal.lp",

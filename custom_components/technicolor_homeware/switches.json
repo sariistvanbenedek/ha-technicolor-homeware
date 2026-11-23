@@ -1,0 +1,61 @@
+[
+  {
+    "key": "wifi_24",
+    "name": "Wi-Fi 2,4 GHz",
+    "page": "modals/wireless-modal.lp?radio=radio_2G&iface=wl0",
+    "field": "ap_enabled",
+    "expect_active": "Wireless_Tab_1",
+    "icon": "mdi:wifi"
+  },
+  {
+    "key": "wifi_5",
+    "name": "Wi-Fi 5 GHz",
+    "page": "modals/wireless-modal.lp?radio=radio_5G&iface=wl1",
+    "field": "ap_enabled",
+    "expect_active": "Wireless_Tab_3",
+    "icon": "mdi:wifi"
+  },
+  {
+    "key": "guest_24",
+    "name": "Vendég Wi-Fi 2,4 GHz",
+    "page": "modals/wireless-modal.lp?radio=radio_2G&iface=wl0_1",
+    "field": "ap_enabled",
+    "expect_active": "Wireless_Tab_2",
+    "icon": "mdi:account-network"
+  },
+  {
+    "key": "guest_5",
+    "name": "Vendég Wi-Fi 5 GHz",
+    "page": "modals/wireless-modal.lp?radio=radio_5G&iface=wl1_1",
+    "field": "ap_enabled",
+    "expect_active": "Wireless_Tab_4",
+    "icon": "mdi:account-network"
+  },
+  {
+    "key": "wps",
+    "name": "WPS",
+    "page": "modals/wireless-modal.lp?radio=radio_2G&iface=wl0",
+    "field": "wps_enabled",
+    "expect_active": "Wireless_Tab_1",
+    "icon": "mdi:wifi-lock-open"
+  },
+  {
+    "key": "samba",
+    "name": "Fájlmegosztás (Samba)",
+    "page": "modals/contentsharing-modal.lp",
+    "field": "sambaFilesharing",
+    "icon": "mdi:folder-network",
+    "post": "form",
+    "with_on": {
+      "samba": "1"
+    }
+  },
+  {
+    "key": "dlna",
+    "name": "DLNA médiaszerver",
+    "page": "modals/contentsharing-modal.lp",
+    "field": "dlnaEnabled",
+    "icon": "mdi:television-play",
+    "post": "form"
+  }
+]

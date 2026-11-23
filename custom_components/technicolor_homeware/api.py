@@ -13,7 +13,17 @@ import aiohttp
 from yarl import URL
 
 from .const import HOME_PAGE, PROBE_MAX_PAGES, PROBE_PAGES, PROBE_SKIP
-from .parser import extract_csrf, is_login_page, page_fingerprint, parse_page, summarize_page
+from .parser import (
+    extract_csrf,
+    find_switch,
+    form_errors,
+    is_login_page,
+    page_fingerprint,
+    parse_page,
+    save_report,
+    serialize_form,
+    summarize_page,
+)
 from .srp6 import SrpUser
 
 _LOGGER = logging.getLogger(__name__)
@@ -65,6 +75,7 @@ class TechnicolorClient:
         self._executor = executor or _default_executor
         self._lock = asyncio.Lock()
         self._logged_in = False
+        self.last_save_report: dict[str, Any] | None = None
 
     @property
     def base_url(self) -> str:
@@ -72,7 +83,7 @@ class TechnicolorClient:
         return self._base
 
     async def _request(
-        self, method: str, path: str, data: dict[str, str] | None = None
+        self, method: str, path: str, data: dict[str, str] | list[tuple[str, str]] | None = None
     ) -> tuple[int, str, str]:
         url = f"{self._base}/{path.lstrip('/')}"
         try:
@@ -186,6 +197,64 @@ class TechnicolorClient:
         async with self._lock:
             status, text, _ = await self._request("POST", path, {**data, "CSRFtoken": token})
         return status, text
+
+    async def async_submit_form(
+        self,
+        path: str,
+        field: str,
+        value: str,
+        omit: tuple[str, ...] = (),
+        spec: dict[str, Any] | None = None,
+        minimal: bool = True,
+        extra: dict[str, str] | None = None,
+    ) -> str:
+        """Change one field the way the web UI's Save does.
+
+        minimal=True (default) sends only `field`; the router keeps every other
+        setting, and no password or network name leaves Home Assistant.
+        minimal=False sends the whole form back with only `field` changed.
+        `extra` sets further fields of the same form at the same time (for a
+        setting the router only accepts together with another one).
+        With `spec`, the page must pass the switch's safety checks first.
+        Returns the router's answer.
+        """
+        extra = dict(extra or {})
+        html = await self.async_get(path)
+        if spec is not None and await self._executor(find_switch, html, spec) is None:
+            raise TechnicolorError(f"{path} is not the expected page, nothing was changed")
+        pairs = await self._executor(serialize_form, html, field)
+        if not any(name == field for name, _ in pairs):
+            raise TechnicolorError(f"{field} is not on {path}")
+        token = extract_csrf(html) or extract_csrf(await self.async_get(HOME_PAGE))
+        if not token:
+            raise TechnicolorConnectionError("No CSRF token for saving")
+        names = {name for name, _ in pairs}
+        if unknown := sorted(set(extra) - names):
+            raise TechnicolorError(f"{', '.join(unknown)} not on {path}, nothing was changed")
+        if minimal:
+            data = [(field, value), *extra.items()]
+        else:
+            data = [
+                (name, value if name == field else extra.get(name, current))
+                for name, current in pairs
+                if name not in omit and name.lower() != "csrftoken" and name not in ("action", "fromModal")
+            ]
+        data += [("action", "SAVE"), ("fromModal", "YES"), ("CSRFtoken", token)]
+        before = set(await self._executor(form_errors, html))
+        async with self._lock:
+            status, text, url = await self._request("POST", path, data)
+        if self._needs_login(path, status, text, url):
+            raise TechnicolorAuthError("Session expired while saving")
+        # hints the page always carries are not errors; only new messages are
+        errors = [e for e in await self._executor(form_errors, text) if e not in before] if status < 400 else []
+        if status >= 400 or errors:
+            report = await self._executor(save_report, path, status, text, data)
+            self.last_save_report = report
+            _LOGGER.warning("Saving %s failed: %s", path, report["summary"])
+            if status >= 400:
+                raise TechnicolorConnectionError(f"Saving {path} failed (HTTP {status}): {report['summary'][:200]}")
+            raise TechnicolorError("The router refused the change: " + "; ".join(errors))
+        return text
 
     async def async_reboot(self) -> None:
         """Ask the gateway to reboot (same request as the web UI's Reboot button)."""

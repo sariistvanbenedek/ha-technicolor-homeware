@@ -34,7 +34,9 @@ PROBE_PAGES = (
 # Never fetched by the probe: actions, credentials, Wi-Fi keys.
 PROBE_SKIP = (
     "reset", "reboot", "restart", "upgrade", "logout", "signout", "password",
-    "user", "wireless", "wifi", "assist", "remote", "voice", "sip", "mmpbx",
-    "backup", "restore", "config", "ping", "traceroute",
+    "user", "assist", "remote", "voice", "sip", "mmpbx",
+    "backup", "restore", "config", "ping", "traceroute", "qrcode",
 )
-PROBE_MAX_PAGES = 30
+SETTINGS_REFRESH_SECONDS = 60
+SWITCH_SPEC_FILE = "switches.json"
+PROBE_MAX_PAGES = 45

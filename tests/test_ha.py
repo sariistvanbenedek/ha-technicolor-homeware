@@ -71,7 +71,7 @@ async def test_full_setup(hass: HomeAssistant, socket_enabled) -> None:
 
         diag = await async_get_config_entry_diagnostics(hass, entry)
         assert diag["entry"]["password"] == "**REDACTED**"
-        assert "modals/device-modal.lp" in diag["probe"]
+        assert "modals/device-modal_lp" in diag["probe"]
         assert "77.126.41.183" not in str(diag)
 
         # device disappears -> not_home
@@ -121,3 +121,166 @@ async def test_reauth(hass: HomeAssistant, socket_enabled) -> None:
         assert entry.data["password"] == "NEWPASS99"
         assert entry.state is ConfigEntryState.LOADED
         assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+
+async def test_wifi_switch(hass: HomeAssistant, socket_enabled) -> None:
+    from unittest.mock import patch
+
+    from homeassistant.exceptions import HomeAssistantError
+    from pytest import raises as _pytest_raises
+
+    specs = [
+        {"key": "wifi24", "name": "Wi-Fi 2,4 GHz", "page": "modals/wireless-modal.lp?iface=wl0", "label": "State"},
+        {"key": "missing", "name": "Nincs ilyen", "page": "modals/wireless-modal.lp", "label": "Nem létező"},
+        {"key": "wrongtab", "name": "Rossz fül", "page": "modals/wireless-modal.lp", "field": "wifi_state",
+         "expect_active": "Wireless_Tab_3"},
+    ]
+    router = MockRouter()
+    with patch("custom_components.technicolor_homeware.load_switch_specs", return_value=specs):
+        async with TestServer(router.app()) as server:
+            await _setup(hass, server.port)
+            await hass.async_block_till_done()
+            switches = hass.states.async_entity_ids("switch")
+            assert len(switches) == 1, switches
+            entity_id = switches[0]
+            assert hass.states.get(entity_id).state == "on"
+
+            await hass.services.async_call("switch", "turn_off", {"entity_id": entity_id}, blocking=True)
+            assert router.wifi["wifi_state"] == "0"
+            assert router.wifi["wpa_psk"] == "TOPSECRET123"
+            saved = router.saves[-1]
+            # default: only the changed field leaves Home Assistant
+            assert set(saved) == {"wifi_state", "action", "fromModal", "CSRFtoken"}
+            assert hass.states.get(entity_id).state == "off"
+
+            await hass.services.async_call("switch", "turn_on", {"entity_id": entity_id}, blocking=True)
+            assert router.wifi["wifi_state"] == "1"
+            assert hass.states.get(entity_id).state == "on"
+
+            # a router-side crash is reported, kept for diagnostics, and never leaks what was sent
+            router.crash_on_save = True
+            with _pytest_raises(HomeAssistantError):
+                await hass.services.async_call("switch", "turn_off", {"entity_id": entity_id}, blocking=True)
+            entry = hass.config_entries.async_entries(DOMAIN)[0]
+            assert entry.runtime_data.client.last_save_report["sent_fields"][0] == "wifi_state"
+            with _pytest_raises(Exception):  # full form: the password is sent, but never kept
+                await entry.runtime_data.client.async_submit_form(
+                    "modals/wireless-modal.lp", "wifi_state", "0", minimal=False
+                )
+            report = entry.runtime_data.client.last_save_report
+            assert report["status"] == 500 and "attempt to concatenate nil" in report["text"]
+            assert "TOPSECRET123" not in str(report) and "wpa_psk" in report["sent_fields"]
+            diag = await async_get_config_entry_diagnostics(hass, entry)
+            assert diag["last_save_error"]["status"] == 500
+            router.crash_on_save = False
+
+            # full-form mode: everything else is sent back unchanged
+            client = entry.runtime_data.client
+            await client.async_submit_form("modals/wireless-modal.lp", "wifi_state", "0", minimal=False)
+            saved = router.saves[-1]
+            assert saved["ssid"] == "Telekom-301213" and saved["security"] == "wpa2-psk"
+            assert saved["wpa_psk"] == "TOPSECRET123" and router.wifi["wifi_state"] == "0"
+
+            # the router refuses a full save: reported, nothing changes
+            router.wifi["wpa_psk"] = "CHANGED-ON-ROUTER"
+            with _pytest_raises(Exception):
+                await client.async_submit_form("modals/wireless-modal.lp", "wifi_state", "1", minimal=False)
+            assert router.wifi["wifi_state"] == "0"
+            entry = hass.config_entries.async_entries(DOMAIN)[0]
+            assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_sharing_switches(hass: HomeAssistant, socket_enabled) -> None:
+    """DLNA / Samba: full-form save, instant feedback, confirmation, Samba enabled with file sharing."""
+    import asyncio
+    import time
+    from unittest.mock import patch
+
+    from homeassistant.exceptions import HomeAssistantError
+
+    from custom_components.technicolor_homeware import load_switch_specs
+
+    specs = [s for s in load_switch_specs() if s["key"] in ("samba", "dlna")]
+    assert len(specs) == 2
+    router = MockRouter()
+    with patch("custom_components.technicolor_homeware.load_switch_specs", return_value=specs):
+        async with TestServer(router.app()) as server:
+            await _setup(hass, server.port)
+            await hass.async_block_till_done()
+            registry = er.async_get(hass)
+            ids = {e.unique_id.rsplit("_", 1)[-1]: e.entity_id for e in registry.entities.values()
+                   if e.domain == "switch"}
+            samba, dlna = ids["samba"], ids["dlna"]
+            assert hass.states.get(samba).state == "on"
+            assert hass.states.get(dlna).state == "off"
+            entry = hass.config_entries.async_entries(DOMAIN)[0]
+            coordinator = entry.runtime_data
+
+            # DLNA on: the whole form goes back, nothing else changes
+            await hass.services.async_call("switch", "turn_on", {"entity_id": dlna}, blocking=True)
+            assert router.sharing["dlnaEnabled"] == "1"
+            sent = router.sharing_saves[-1]
+            assert sent["usb3Enabled"] == "1" and sent["sambaName"] == "Technicolor"
+            assert sent["samba"] == "1" and sent["sambaFilesharing"] == "1"
+            assert hass.states.get(dlna).state == "on"
+            # confirmed from the save's own answer: no extra page reads, no full refresh
+            assert router.requests[-1] == "contentsharing-modal"
+
+            # the switch moves at once, before the router has finished saving
+            router.hold_sharing_save = asyncio.Event()
+            task = hass.async_create_task(
+                hass.services.async_call("switch", "turn_off", {"entity_id": dlna}, blocking=True)
+            )
+            for _ in range(100):
+                await asyncio.sleep(0.02)
+                if len(router.sharing_saves) == 2:
+                    break
+            assert len(router.sharing_saves) == 2
+            assert hass.states.get(dlna).state == "off"
+            assert router.sharing["dlnaEnabled"] == "1"
+            router.hold_sharing_save.set()
+            await task
+            router.hold_sharing_save = None
+            assert router.sharing["dlnaEnabled"] == "0"
+            assert hass.states.get(dlna).state == "off"
+
+            # refused by the router: error, and the switch goes back
+            router.refuse_sharing = True
+            with pytest.raises(HomeAssistantError):
+                await hass.services.async_call("switch", "turn_on", {"entity_id": dlna}, blocking=True)
+            assert hass.states.get(dlna).state == "off"
+            router.refuse_sharing = False
+
+            # Samba turned off on the router itself: file sharing switches it back on too
+            router.sharing.update(samba="0", sambaFilesharing="0")
+            coordinator.force_settings_refresh()
+            await coordinator.async_refresh()
+            await hass.async_block_till_done()
+            assert hass.states.get(samba).state == "off"
+            await hass.services.async_call("switch", "turn_on", {"entity_id": samba}, blocking=True)
+            assert router.sharing["samba"] == "1" and router.sharing["sambaFilesharing"] == "1"
+            assert router.sharing_saves[-1]["dlnaEnabled"] == "0"
+            assert hass.states.get(samba).state == "on"
+            # turning it off leaves Samba itself alone
+            await hass.services.async_call("switch", "turn_off", {"entity_id": samba}, blocking=True)
+            assert router.sharing["samba"] == "1" and router.sharing["sambaFilesharing"] == "0"
+            assert hass.states.get(samba).state == "off"
+
+            # a poll that read the page before a save does not undo the save
+            page = specs[0]["page"]
+            coordinator._written[page] = time.monotonic() + 3600
+            router.sharing["sambaFilesharing"] = "1"
+            coordinator.force_settings_refresh()
+            await coordinator.async_refresh()
+            await hass.async_block_till_done()
+            assert hass.states.get(samba).state == "off"
+            coordinator._written[page] = 0.0
+            coordinator.force_settings_refresh()
+            await coordinator.async_refresh()
+            await hass.async_block_till_done()
+            assert hass.states.get(samba).state == "on"
+
+            diag = await async_get_config_entry_diagnostics(hass, entry)
+            assert "SHAREPASS77" not in str(diag)
+            assert await hass.config_entries.async_unload(entry.entry_id)

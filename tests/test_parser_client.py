@@ -162,3 +162,34 @@ async def test_follows_https_style_redirect(socket_enabled) -> None:
                 assert "EdgeRouter-X" in html
                 assert client.base_url == f"http://127.0.0.1:{real.port}"
                 assert router.logins == 1
+
+
+def test_probe_summary_never_leaks_wifi_secrets() -> None:
+    import json as _json
+
+    html = (FIX / "wireless-modal.lp").read_text(encoding="utf-8")
+    summary = summarize_page("modals/wireless-modal.lp", 200, html)
+    dumped = _json.dumps(summary)
+    for secret in ("TOPSECRET123", "SHOWNSECRET9", "12345670", "tok123456789"):
+        assert secret not in dumped, secret
+    state = next(g for g in summary["form"]["groups"] if g["label"] == "State")
+    assert state["inputs"][0] == {"name": "wifi_state", "type": "hidden", "switch": True, "value": "1"}
+    sec = next(g for g in summary["form"]["groups"] if g["label"] == "Security")
+    assert sec["inputs"][0]["selected"] == "wpa2-psk"
+    assert "modals/wireless-modal.lp?iface=wl0_1&radio=radio_2G" in summary["links"]
+    assert "SAVE" in summary["actions"]
+
+
+
+def test_page_safety_checks() -> None:
+    from custom_components.technicolor_homeware.parser import find_switch
+
+    html = (FIX / "wireless-modal.lp").read_text(encoding="utf-8")
+    ok = {"field": "wifi_state", "expect_active": "Wireless_Tab_1", "expect_ids": {"Frequency band": "2.4GHz"}}
+    assert find_switch(html, ok) == ("wifi_state", True)
+    assert find_switch(html, {**ok, "expect_active": "Wireless_Tab_2"}) is None
+    assert find_switch(html, {**ok, "expect_ids": {"Frequency band": "5GHz"}}) is None
+    assert find_switch(html, {**ok, "expect_active": "Nope"}) is None
+    summary = summarize_page("modals/wireless-modal.lp", 200, html)
+    tab2 = next(a for a in summary["form"]["anchors"] if a.get("li_id") == "Wireless_Tab_2")
+    assert tab2["data-remote"] == "modals/wireless-modal.lp?iface=wl0_1&radio=radio_2G"

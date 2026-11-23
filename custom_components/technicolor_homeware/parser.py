@@ -18,7 +18,8 @@ CSRF_RES = (
     re.compile(r"""\bname\s*=\s*["']?CSRFtoken\b["']?[^>]*?\bvalue\s*=\s*["']?([^"'\s>]+)""", re.I),
     re.compile(r"""\bCSRFtoken["']?\s*[:=]\s*["']([0-9A-Za-z_\-+/=]{8,})["']"""),
 )
-LINK_RE = re.compile(r"""(?:^|["'/\s])(modals/[A-Za-z0-9_\-]+\.lp)""")
+LINK_RE = re.compile(r"""(?:^|["'/\s])(modals/[A-Za-z0-9_\-]+\.lp(?:\?[A-Za-z0-9_=&;%.\-]+)?)""")
+SENSITIVE_LABEL = ("password", "jelszó", "jelszo", "kulcs", "key", "psk", "passphrase", "pin", "serial", "sorozat")
 AJAX_RE = re.compile(r"""(?:^|["'/\s])(ajax/[A-Za-z0-9_\-]+\.lua)""")
 
 COLORS = ("green", "red", "orange", "yellow", "blue", "off", "gray", "grey")
@@ -311,7 +312,9 @@ def parse_page(html: str) -> dict[str, Any]:
         if text and len(text) <= 120 and el.get("id") not in result["ids"]:
             result["ids"][el["id"]] = text
 
-    result["links"] = sorted(set(LINK_RE.findall(html)))
+    links = {link.replace("&amp;", "&") for link in LINK_RE.findall(html)}
+    links |= {card["remote"].lstrip("/") for card in result["cards"].values() if card.get("remote")}
+    result["links"] = sorted(link for link in links if link.startswith("modals/"))
     result["ajax"] = sorted(set(AJAX_RE.findall(html)))
     return result
 
@@ -507,8 +510,12 @@ def extract_broadband(home: dict[str, Any] | None) -> dict[str, Any]:
 # --- diagnostics helpers ---------------------------------------------------
 
 
+_WIFI_QR_RE = re.compile(r"WIFI:[^\"'<>\s]*", re.I)
+
+
 def mask_text(text: str) -> str:
-    """Hide the device-specific half of MACs and public IPv4 addresses."""
+    """Hide Wi-Fi QR payloads, the device-specific half of MACs and public IPv4 addresses."""
+    text = _WIFI_QR_RE.sub("WIFI:***", text)
     text = MAC_RE.sub(lambda m: normalize_mac(m.group(0))[:8] + ":xx:xx:xx", text)
     return IPV4_RE.sub(
         lambda m: (".".join(m.group(0).split(".")[:2]) + ".x.x") if is_public_ipv4(m.group(0)) else m.group(0),
@@ -527,6 +534,78 @@ def mask(obj: Any) -> Any:
     return obj
 
 
+def _input_entry(inp: Tag, label: str) -> dict[str, Any]:
+    """Describe one form control; values only where they cannot be secrets."""
+    name = inp.get("name") or inp.get("id") or ""
+    kind = inp.get("type", "text").lower() if inp.name == "input" else inp.name
+    entry: dict[str, Any] = {"name": name, "type": kind}
+    secret = _is_sensitive(name) or any(s in label.lower() for s in SENSITIVE_LABEL) or kind == "password"
+    if inp.find_parent(class_="switch") is not None:
+        entry["switch"] = True
+        entry["value"] = inp.get("value")
+    elif kind in ("checkbox", "radio"):
+        entry["value"] = inp.get("value")
+        entry["checked"] = inp.has_attr("checked")
+    elif inp.name == "select":
+        options = inp.find_all("option")
+        entry["options"] = [o.get("value") for o in options][:15]
+        chosen = next((o for o in options if o.has_attr("selected")), None)
+        entry["selected"] = chosen.get("value") if chosen else None
+    elif not secret and kind in ("text", "number", "hidden"):
+        entry["value"] = (inp.get("value") or "")[:40]
+    else:
+        entry["value"] = "***" if inp.get("value") else ""
+    return entry
+
+
+def form_structure(html: str) -> dict[str, Any]:
+    """Field names and non-secret values of the page's form, as the web UI would post it."""
+    soup = BeautifulSoup(html, "html.parser")
+    groups = []
+    seen: set[int] = set()
+    for group in soup.select(".control-group"):
+        label_el = group.find("label", class_="control-label")
+        label = _clean(label_el.get_text(" ", strip=True)) if label_el else ""
+        inputs = []
+        for inp in group.find_all(["input", "select", "textarea"]):
+            seen.add(id(inp))
+            inputs.append(_input_entry(inp, label))
+        if inputs:
+            groups.append({"label": label, "inputs": inputs})
+    loose = [
+        _input_entry(inp, "")
+        for inp in soup.find_all(["input", "select", "textarea"])
+        if id(inp) not in seen
+    ]
+    forms = [{"action": f.get("action", ""), "method": f.get("method", ""), "id": f.get("id", "")} for f in soup.find_all("form")]
+    buttons = [
+        {"id": b.get("id", ""), "text": _clean(b.get_text(" ", strip=True))[:30]}
+        for b in soup.select(".btn, button")
+        if b.get("id") or b.get_text(strip=True)
+    ][:15]
+    anchors = []
+    for a in soup.find_all("a"):
+        attrs = {
+            k: str(a.get(k))[:120]
+            for k in ("id", "href", "data-remote", "data-target", "data-value", "onclick")
+            if a.get(k) and a.get(k) != "#"
+        }
+        parent = a.find_parent("li")
+        if parent is not None and parent.get("id"):
+            attrs["li_id"] = parent["id"]
+            attrs["li_class"] = " ".join(parent.get("class", []))
+        if attrs:
+            attrs["text"] = _clean(a.get_text(" ", strip=True))[:40]
+            anchors.append(attrs)
+    return {
+        "forms": forms[:5],
+        "groups": groups[:60],
+        "other_inputs": loose[:30],
+        "buttons": buttons,
+        "anchors": anchors[:40],
+    }
+
+
 def summarize_page(path: str, status: int, html: str) -> dict[str, Any]:
     """Compact, masked description of a page for the diagnostics probe."""
     summary: dict[str, Any] = {"status": status, "bytes": len(html)}
@@ -538,10 +617,12 @@ def summarize_page(path: str, status: int, html: str) -> dict[str, Any]:
         return summary
     summary["login_page"] = is_login_page(html, modal=path != "/")
     parsed = parse_page(html)
-    serial_like = ("serial", "sorozat")
     fields = {
-        k: ("***" if any(s in k.lower() for s in serial_like) else v) for k, v in list(parsed["fields"].items())[:80]
+        k: ("***" if any(s in k.lower() for s in SENSITIVE_LABEL) else v)
+        for k, v in list(parsed["fields"].items())[:80]
     }
+    summary["form"] = mask(form_structure(html))
+    summary["actions"] = sorted(set(re.findall(r"""\baction["']?\s*[:=,]\s*["']([A-Za-z_]+)["']""", html)))[:20]
     summary.update(
         {
             "title": parsed["title"],
@@ -555,10 +636,148 @@ def summarize_page(path: str, status: int, html: str) -> dict[str, Any]:
             ),
             "cards": mask(parsed["cards"]),
             "popups": len(parsed["popups"]),
-            "ids": mask(dict(list(parsed["ids"].items())[:80])),
+            "ids": mask(
+                {k: ("***" if _is_sensitive(k) or any(x in k.lower() for x in SENSITIVE_LABEL) else v)
+                 for k, v in list(parsed["ids"].items())[:80]}
+            ),
             "links": parsed["links"],
             "ajax": parsed["ajax"],
             "has_system_reboot": "system_reboot" in html,
         }
     )
     return summary
+
+
+# --- settings (switches) ---------------------------------------------------
+
+_SKIP_INPUT_TYPES = ("submit", "button", "reset", "file", "image")
+
+
+def _switch_input(group: Tag) -> Tag | None:
+    return group.select_one(".switch input[type=hidden]") or group.select_one(".switch input")
+
+
+def page_matches(soup: BeautifulSoup, spec: dict[str, Any]) -> bool:
+    """Check the page really is the one the switch belongs to (e.g. the right Wi-Fi tab).
+
+    expect_active: id of the tab (li or a) that must be the active one.
+    expect_ids:    {element id: text it must contain}.
+    """
+    if active := spec.get("expect_active"):
+        el = soup.find(id=active)
+        if el is None:
+            return False
+        classes = set(el.get("class", []))
+        if el.name == "a" and (parent := el.find_parent("li")) is not None:
+            classes |= set(parent.get("class", []))
+        if "active" not in classes:
+            return False
+    for element_id, text in (spec.get("expect_ids") or {}).items():
+        el = soup.find(id=element_id)
+        if el is None or str(text).lower() not in _clean(el.get_text(" ", strip=True)).lower():
+            return False
+    return True
+
+
+def find_switch(html: str, spec: dict[str, Any]) -> tuple[str, bool] | None:
+    """Locate a settings switch by input name ('field') or by its label text ('label').
+
+    Returns (input name, is on) or None when the page has no such switch.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    if not page_matches(soup, spec):
+        return None
+    if field := spec.get("field"):
+        inp = soup.find("input", attrs={"name": field})
+        if inp is None:
+            return None
+        return field, inp.get("value") == "1"
+    wanted = str(spec.get("label", "")).lower()
+    if not wanted:
+        return None
+    matches = []
+    for group in soup.select(".control-group"):
+        label = group.find("label", class_="control-label")
+        if label is not None and wanted in _clean(label.get_text(" ", strip=True)).lower():
+            inp = _switch_input(group)
+            if inp is not None and inp.get("name"):
+                matches.append(inp)
+    index = int(spec.get("index", 0))
+    if index >= len(matches):
+        return None
+    inp = matches[index]
+    return inp["name"], inp.get("value") == "1"
+
+
+def serialize_form(html: str, field: str) -> list[tuple[str, str]]:
+    """The fields of the form that holds `field`, as the web UI's Save would send them.
+
+    Mirrors jQuery serializeArray: named, enabled controls; checked boxes only;
+    selected options. Masked placeholders (only '*' or '•') are never sent back.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    target = soup.find("input", attrs={"name": field})
+    scope = target.find_parent("form") if target is not None else None
+    if scope is None:
+        scope = soup
+    pairs: list[tuple[str, str]] = []
+    for el in scope.find_all(["input", "select", "textarea"]):
+        name = el.get("name")
+        if not name or el.has_attr("disabled"):
+            continue
+        if el.name == "input":
+            kind = el.get("type", "text").lower()
+            if kind in _SKIP_INPUT_TYPES:
+                continue
+            if kind in ("checkbox", "radio") and not el.has_attr("checked"):
+                continue
+            value = el.get("value", "on" if kind in ("checkbox", "radio") else "")
+        elif el.name == "select":
+            options = el.find_all("option")
+            chosen = [o for o in options if o.has_attr("selected")] or options[:1]
+            for option in chosen:
+                pairs.append((name, option.get("value", _clean(option.get_text()))))
+            continue
+        else:
+            value = el.get_text()
+        if value and set(value) <= {"*", "•"}:
+            continue
+        pairs.append((name, value))
+    return pairs
+
+
+def form_errors(html: str) -> list[str]:
+    """Validation messages the web UI shows after a failed Save."""
+    soup = BeautifulSoup(html, "html.parser")
+    messages = [
+        _clean(el.get_text(" ", strip=True))
+        for el in soup.select(".control-group.error .help-inline, .alert-error, .error-message")
+    ]
+    return [m for m in messages if m][:5]
+
+
+def save_report(path: str, status: int, text: str, sent: list[tuple[str, str]]) -> dict[str, Any]:
+    """What went wrong with a Save, without any of the values that were sent.
+
+    Every value we posted (Wi-Fi passwords, network names, ...) is blanked out
+    of the router's answer before it is kept or logged.
+    """
+    values = sorted({value for _name, value in sent if value and len(value) >= 3}, key=len, reverse=True)
+
+    def scrub(raw: str) -> str:
+        for value in values:
+            raw = raw.replace(value, "***")
+        return mask_text(raw)
+
+    soup = BeautifulSoup(text, "html.parser")
+    for tag in soup(["style"]):
+        tag.decompose()
+    visible = scrub(_clean(soup.get_text(" ", strip=True)))
+    return {
+        "path": path,
+        "status": status,
+        "sent_fields": [name for name, _ in sent],
+        "summary": visible[:300],
+        "text": visible[:4000],
+        "fingerprint": scrub(page_fingerprint(text))[:600],
+    }
