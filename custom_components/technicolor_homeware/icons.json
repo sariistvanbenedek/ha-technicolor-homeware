@@ -1,0 +1,16 @@
+{
+  "entity": {
+    "sensor": {
+      "connected_devices": { "default": "mdi:devices" },
+      "wan_ip": { "default": "mdi:ip-network" },
+      "cpu_usage": { "default": "mdi:cpu-64-bit" },
+      "memory_usage": { "default": "mdi:memory" },
+      "firmware": { "default": "mdi:package-variant" },
+      "line_rate_up": { "default": "mdi:upload-network" },
+      "line_rate_down": { "default": "mdi:download-network" }
+    },
+    "binary_sensor": {
+      "broadband": { "default": "mdi:wan" }
+    }
+  }
+}

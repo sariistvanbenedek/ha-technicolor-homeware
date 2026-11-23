@@ -1,0 +1,52 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Technicolor Homeware router",
+        "description": "Enter the router address and the web interface login. On Telekom routers the user is admin and the password is the Access Key printed on the label under the device.",
+        "data": {
+          "host": "Router address",
+          "username": "Username",
+          "password": "Password (Access Key)",
+          "ssl": "Use HTTPS"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Router password changed",
+        "description": "The router at {host} rejected the stored password. Enter the current one.",
+        "data": {
+          "password": "Password (Access Key)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot reach the router web interface.",
+      "invalid_auth": "Wrong username or password (after several failed attempts the router may lock the login for a while).",
+      "unsupported": "Logged in, but the device list page was not found on this firmware.",
+      "unknown": "Unexpected error, see the log."
+    },
+    "abort": {
+      "already_configured": "This router is already configured.",
+      "reauth_successful": "The new password works."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "connected_devices": { "name": "Connected devices" },
+      "wan_ip": { "name": "WAN IP address" },
+      "last_boot": { "name": "Last reboot" },
+      "cpu_usage": { "name": "CPU usage" },
+      "memory_usage": { "name": "Memory usage" },
+      "firmware": { "name": "Software version" },
+      "line_rate_up": { "name": "Upstream line rate" },
+      "line_rate_down": { "name": "Downstream line rate" }
+    },
+    "binary_sensor": {
+      "wan_connected": { "name": "Internet connection" },
+      "broadband": { "name": "Broadband link" }
+    },
+    "button": {
+      "reboot": { "name": "Reboot" }
+    }
+  }
+}

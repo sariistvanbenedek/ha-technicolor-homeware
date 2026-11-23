@@ -1,0 +1,18 @@
+{
+  "domain": "technicolor_homeware",
+  "name": "Technicolor Homeware router (Telekom FGA2235)",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/FELHASZNALONEV/ha-technicolor-homeware",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/FELHASZNALONEV/ha-technicolor-homeware/issues",
+  "loggers": [
+    "custom_components.technicolor_homeware"
+  ],
+  "requirements": [
+    "beautifulsoup4>=4.12"
+  ],
+  "version": "0.1.0"
+}

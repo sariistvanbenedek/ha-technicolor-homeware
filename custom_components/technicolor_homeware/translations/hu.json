@@ -1,0 +1,52 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Technicolor Homeware router",
+        "description": "Add meg a router címét és a webes felület belépési adatait. Telekomos routernél a felhasználónév admin, a jelszó pedig a készülék alján lévő matricán található Access Key.",
+        "data": {
+          "host": "Router címe",
+          "username": "Felhasználónév",
+          "password": "Jelszó (Access Key)",
+          "ssl": "HTTPS használata"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Megváltozott a router jelszava",
+        "description": "A(z) {host} címen lévő router nem fogadja el a mentett jelszót. Add meg az aktuálisat.",
+        "data": {
+          "password": "Jelszó (Access Key)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Nem érhető el a router webes felülete.",
+      "invalid_auth": "Hibás felhasználónév vagy jelszó (több sikertelen próbálkozás után a router egy időre letilthatja a belépést).",
+      "unsupported": "A belépés sikerült, de ezen a firmware-en nem található az eszközlista oldal.",
+      "unknown": "Váratlan hiba, részletek a naplóban."
+    },
+    "abort": {
+      "already_configured": "Ez a router már be van állítva.",
+      "reauth_successful": "Az új jelszó működik."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "connected_devices": { "name": "Csatlakozott eszközök" },
+      "wan_ip": { "name": "WAN IP-cím" },
+      "last_boot": { "name": "Utolsó újraindítás" },
+      "cpu_usage": { "name": "CPU-terhelés" },
+      "memory_usage": { "name": "Memóriahasználat" },
+      "firmware": { "name": "Szoftververzió" },
+      "line_rate_up": { "name": "Feltöltési vonalsebesség" },
+      "line_rate_down": { "name": "Letöltési vonalsebesség" }
+    },
+    "binary_sensor": {
+      "wan_connected": { "name": "Internetkapcsolat" },
+      "broadband": { "name": "Szélessávú kapcsolat" }
+    },
+    "button": {
+      "reboot": { "name": "Újraindítás" }
+    }
+  }
+}
