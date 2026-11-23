@@ -4,10 +4,10 @@
   "codeowners": [],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/FELHASZNALONEV/ha-technicolor-homeware",
+  "documentation": "https://github.com/sariistvanbenedek/ha-technicolor-homeware",
   "integration_type": "hub",
   "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/FELHASZNALONEV/ha-technicolor-homeware/issues",
+  "issue_tracker": "https://github.com/sariistvanbenedek/ha-technicolor-homeware/issues",
   "loggers": [
     "custom_components.technicolor_homeware"
   ],
